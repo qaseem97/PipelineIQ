@@ -18,6 +18,9 @@ PipelineIQ runs a small AI software team. You describe a product in one sentence
 | **REWORK** | the work goes back with specific feedback, to the phase that caused the problem |
 | **ESCALATE** | retry limit reached, a human takes over |
 
+## Proposal[Uploading PipelineIQ_Hacktoberfest_Proposal.pdf…]()
+
+
 Every step is recorded, so you get full traceability from each requirement to the test that proves it.
 
 ## How it works
