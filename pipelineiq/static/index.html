@@ -62,6 +62,32 @@ main{padding:28px 32px 48px;min-width:0}
 .working{animation:pulse 1.4s ease-in-out infinite}
 @media (prefers-reduced-motion:reduce){.working{animation:none}}
 
+/* run progress: step checklist + API call status */
+.progress{margin-top:20px}
+.phead{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap;padding:16px 16px 12px}
+.big{font-size:30px;font-weight:800;font-stretch:112%;line-height:1;font-variant-numeric:tabular-nums}
+.big span{font-size:15px;font-weight:600;color:var(--muted);font-stretch:100%}
+.now{font-size:13.5px;color:var(--muted);margin-top:6px}
+.now b{color:var(--ink)}
+.stats{display:flex;gap:18px;flex-wrap:wrap;font-size:13px;color:var(--muted)}
+.stats b{color:var(--ink);font-variant-numeric:tabular-nums}
+.pbar{height:8px;margin:0 16px 8px;background:var(--soft);border-radius:999px;overflow:hidden;display:flex}
+.pbar span{display:block;height:100%}
+.steps{list-style:none;margin:0;padding:0 0 4px;border-top:1px solid var(--line)}
+.steps li{display:grid;grid-template-columns:26px 1fr auto;gap:12px;align-items:start;padding:10px 16px;border-bottom:1px solid var(--soft)}
+.steps li:last-child{border-bottom:0}
+.steps li.active{background:var(--soft)}
+.steps li.todo .lbl{color:var(--muted);font-weight:500}
+.ic{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-size:13px;font-weight:800;color:var(--panel)}
+.ic.done{background:var(--go)} .ic.active{background:var(--cobalt)} .ic.failed{background:var(--stop)}
+.ic.todo{border:2px solid var(--line);color:var(--idle)} .ic.redo{background:var(--hold-bg);color:var(--hold);border:2px solid var(--hold)}
+.steps .lbl{font-weight:600;line-height:1.35}
+.steps .note{font-size:12.5px;color:var(--muted)}
+.steps .note.warn{color:var(--hold)} .steps .note.bad{color:var(--stop)}
+.steps .meta{font:12px/1.9 var(--mono);color:var(--muted);text-align:right;white-space:nowrap}
+.call{font:12px/1.6 var(--mono);margin-top:4px;color:var(--cobalt)}
+.call.bad{color:var(--stop);white-space:normal}
+
 .cols{display:grid;grid-template-columns:minmax(260px,360px) 1fr;gap:20px;margin-top:20px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;min-width:0}
 .card>h2{font-size:15px;margin:0;padding:14px 16px;border-bottom:1px solid var(--line)}
@@ -91,6 +117,7 @@ pre.code{margin:0;padding:14px;background:var(--paper);border-radius:8px;font:12
 @media (max-width:900px){
   .layout{grid-template-columns:1fr} aside{border-right:0;border-bottom:1px solid var(--line)}
   .cols{grid-template-columns:1fr} main{padding:20px 16px 40px}
+  .steps li{grid-template-columns:26px 1fr} .steps .meta{grid-column:2;text-align:left}
 }
 </style>
 </head>
@@ -258,6 +285,101 @@ function trackSVG(d){
   return s + `</svg>`;
 }
 
+/* the planned run: load knowledge, then for each phase the agent works and the Manager reviews */
+const STEP_LABEL = {
+  kb: "Load agent knowledge bases",
+  "work:requirements": "Requirements agent writes user stories", "review:requirements": "Manager reviews requirements",
+  "work:design": "Design agent drafts the architecture", "review:design": "Manager reviews the design",
+  "work:development": "Development agent writes the code", "review:development": "Manager reviews the code",
+  "work:testing": "Testing agent writes the tests", "review:testing": "Manager runs and reviews the tests",
+};
+const secs = s => s < 60 ? `${s.toFixed(1)}s` : `${Math.floor(s/60)}m ${Math.round(s%60)}s`;
+
+/* replay the event feed to see which step is live and which API calls belong to each step */
+function apiTrace(d){
+  const calls = {}, open = {};
+  let cur = d.running ? "kb" : null, errStep = null, errMsg = null;
+  d.events.forEach(e => {
+    switch(e.kind){
+      case "resumed": cur = "kb"; break;
+      case "knowledge": case "agent_done": case "review": cur = null; break;
+      case "agent_start": cur = `work:${e.phase}`; break;
+      case "review_start": cur = `review:${e.phase}`; break;
+      case "llm_start": open[e.call] = {model:e.model, t:e.t, retries:0}; (calls[cur || "kb"] ||= []).push(open[e.call]); break;
+      case "llm_end": if(open[e.call]) Object.assign(open[e.call], {end:e.t, ok:e.ok, ms:e.ms, error:e.error}); break;
+      case "retry": { const live = Object.values(open).filter(c => c.end == null).pop(); if(live) live.retries++; break; }
+      case "error": errStep = cur; errMsg = e.message; break;
+    }
+  });
+  return {calls, cur: d.running ? cur : null, errStep, errMsg};
+}
+
+function stepList(d){
+  const tasks = {}; Object.values(d.state.tasks).forEach(t => tasks[t.phase] = t);
+  const tr = apiTrace(d), reviews = {};
+  d.log.forEach(e => reviews[e.phase] = (reviews[e.phase] || 0) + 1);
+  const kbDone = d.events.some(e => e.kind === "knowledge") || Object.keys(tasks).length > 0;
+  return ["kb", ...PHASES.flatMap(p => [`work:${p}`, `review:${p}`])].map(key => {
+    const [kind, phase] = key.split(":"), t = tasks[phase];
+    let status = "todo", note = "", tone = "";
+    if(key === "kb") status = kbDone ? "done" : "todo";
+    else if(kind === "work"){
+      if(t && ["submitted","approved","escalated"].includes(t.status)) status = "done";
+      else if(t && t.status === "rework"){ status = "redo"; note = "Sent back by the Manager, to redo"; tone = "warn"; }
+      else if(t && t.status === "in_progress" && t.feedback){ status = "redo"; note = `To redo: ${t.feedback}`; tone = "warn"; }
+      if(t && t.attempt > 1 && status === "done") note = `Done on attempt ${t.attempt}`;
+    } else {
+      if(t && t.status === "approved") status = "done";
+      else if(t && t.status === "escalated"){ status = "failed"; note = "Escalated to a human"; tone = "bad"; }
+      if(reviews[phase] > 1) note = note || `Reviewed ${reviews[phase]} times`;
+    }
+    if(tr.cur === key){ status = "active"; note = kind === "review" ? "Manager is reviewing now" : key === "kb" ? "Embedding knowledge for RAG" : "Agent is working now"; tone = ""; }
+    else if(!d.running && tr.errStep === key){ status = "failed"; note = tr.errMsg; tone = "bad"; }
+    return {key, status, note, tone, calls: tr.calls[key] || []};
+  });
+}
+
+function progressHTML(d){
+  const steps = stepList(d), now = Date.now() / 1000;
+  const done = steps.filter(s => s.status === "done").length, active = steps.find(s => s.status === "active");
+  const next = steps.find(s => s.status === "todo" || s.status === "redo");
+  const all = steps.flatMap(s => s.calls), inflight = all.filter(c => c.end == null);
+  const finished = all.filter(c => c.end != null), failed = finished.filter(c => !c.ok).length;
+  const retries = all.reduce((n, c) => n + c.retries, 0);
+  const avg = finished.length ? finished.reduce((n, c) => n + c.ms, 0) / finished.length / 1000 : 0;
+  const pct = n => `${(n / steps.length * 100).toFixed(1)}%`;
+  const icon = {done:"✓", active:"…", failed:"✕", redo:"↺"};
+
+  const rows = steps.map((s, i) => {
+    const total = s.calls.reduce((n, c) => n + (c.end != null ? c.ms / 1000 : now - c.t), 0);
+    const meta = s.calls.length ? `${s.calls.length} API call${s.calls.length > 1 ? "s" : ""} · ${secs(total)}` : "";
+    const live = s.calls.filter(c => c.end == null).map(c =>
+      `<div class="call working">→ ${esc(c.model)} · waiting ${secs(now - c.t)}${c.retries ? ` · ${c.retries} retr${c.retries > 1 ? "ies" : "y"}` : ""}</div>`).join("");
+    const bad = s.calls.filter(c => c.end != null && !c.ok).map(c => `<div class="call bad">✕ ${esc(c.model)}: ${esc(c.error)}</div>`).join("");
+    return `<li class="${s.status}"><span class="ic ${s.status} ${s.status === "active" ? "working" : ""}" aria-hidden="true">${icon[s.status] || i + 1}</span>
+      <div><div class="lbl">${esc(STEP_LABEL[s.key])}</div>${s.note ? `<div class="note ${s.tone}">${esc(s.note)}</div>` : ""}${live}${bad}</div>
+      <div class="meta">${meta}</div></li>`;
+  }).join("");
+
+  const nowLine = active ? `Now: <b>${esc(STEP_LABEL[active.key])}</b>${next ? ` · Next: ${esc(STEP_LABEL[next.key])}` : ""}`
+    : done === steps.length ? "All steps done" : next ? `Left to do: ${steps.length - done} steps, starting with ${esc(STEP_LABEL[next.key])}` : "";
+  const stats = all.length || d.running
+    ? `<span><b>${finished.length - failed}</b> API calls OK</span><span><b>${inflight.length}</b> in flight</span>
+       <span><b style="${failed ? "color:var(--stop)" : ""}">${failed}</b> failed</span><span><b style="${retries ? "color:var(--hold)" : ""}">${retries}</b> retries</span>
+       <span>avg <b>${finished.length ? secs(avg) : "–"}</b></span>`
+    : `<span>API call details are shown for runs started since the server was last restarted</span>`;
+  const seg = s => steps.filter(x => x.status === s).length;
+
+  return `<section class="card progress" aria-labelledby="prog-h">
+    <h2 id="prog-h">Run progress</h2>
+    <div class="phead"><div><div class="big">${done} <span>of ${steps.length} steps done</span></div><div class="now">${nowLine}</div></div>
+      <div class="stats">${stats}</div></div>
+    <div class="pbar" role="progressbar" aria-valuemin="0" aria-valuemax="${steps.length}" aria-valuenow="${done}" aria-label="Steps done">
+      <span style="width:${pct(done)};background:var(--go)"></span><span class="working" style="width:${pct(seg("active"))};background:var(--cobalt)"></span>
+      <span style="width:${pct(seg("failed"))};background:var(--stop)"></span></div>
+    <ol class="steps">${rows}</ol></section>`;
+}
+
 function statusLine(d){
   const st = d.state.project.status, o = d.outcome;
   if(d.running) return `<span class="pill run">Running</span> Now in ${esc(LABEL[d.state.project.phase] || d.state.project.phase)}`;
@@ -344,6 +466,7 @@ function render(d){
       <span><i style="background:var(--hold)"></i>Sent back for rework</span><span><i style="background:var(--stop)"></i>Escalated to a human</span></div></div>
     <div class="row">${!d.running && s.project.status === "active" ? `<button class="btn" id="resume">Resume pipeline</button>` : ""}${hasCode ? `<a class="btn ghost" href="/api/projects/${esc(s.project.id)}/download">Download generated code</a>` : ""}
       <span class="muted" style="font-size:13px">State version ${s.version}, ${d.log.length} reviews logged</span></div>
+    ${progressHTML(d)}
     <div class="cols">
       <section class="card" aria-labelledby="feed-h"><h2 id="feed-h">Live activity</h2>
         <ul class="feed" aria-live="polite">${feed.length ? feed.map(feedItem).join("") : `<li class="muted">Activity from this session appears here. Reviews from earlier runs are in the process log.</li>`}</ul></section>
