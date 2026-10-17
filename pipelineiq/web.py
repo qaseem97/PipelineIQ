@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 from . import config
 from .agents import PHASE_ORDER
-from .llm import get_llm
+from .llm import TrackedLLM, get_llm
 from .orchestrator import Orchestrator
 from .process_log import ProcessLog
 from .rag import KnowledgeBase
@@ -58,7 +58,7 @@ def _run(store: Store, images: list[bytes] | None) -> None:
             _events.setdefault(pid, []).append({"t": time.time(), "kind": kind, **data})
 
     try:
-        llm = get_llm(on_retry=lambda info: on_event("retry", info))
+        llm = TrackedLLM(get_llm(on_retry=lambda info: on_event("retry", info)), on_event)
         _outcome[pid] = Orchestrator(store, llm, on_event=on_event, kb=kb()).run(images=images)
     except Exception as e:  # noqa: BLE001 - surface any failure in the dashboard
         _outcome[pid] = "error"

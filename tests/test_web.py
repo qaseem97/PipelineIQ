@@ -33,7 +33,10 @@ def test_dashboard_runs_a_project_end_to_end(client):
     d = wait_done(client, pid)
     assert d["outcome"] == "completed"
     assert [e["decision"] for e in d["log"]].count("REWORK") == 1
-    assert {"knowledge", "agent_start", "review"} <= {e["kind"] for e in d["events"]}
+    assert {"knowledge", "agent_start", "review_start", "review"} <= {e["kind"] for e in d["events"]}
+    started = {e["call"] for e in d["events"] if e["kind"] == "llm_start"}
+    ended = {e["call"]: e for e in d["events"] if e["kind"] == "llm_end"}
+    assert started and started == set(ended) and all(e["ok"] for e in ended.values())
     assert pid in [p["id"] for p in client.get("/api/projects").json()]
     z = client.get(f"/api/projects/{pid}/download")
     assert z.status_code == 200 and z.headers["content-type"] == "application/zip"

@@ -1,6 +1,7 @@
 """Thin wrapper around Gemma 4 on the Gemini API, plus an offline fake for tests."""
 from __future__ import annotations
 
+import itertools
 import json
 import re
 import time
@@ -125,6 +126,33 @@ class FakeLLM:
 
     def generate_json(self, prompt: str, **kwargs) -> dict | list:
         return extract_json(self.generate(prompt, **kwargs))
+
+
+class TrackedLLM:
+    """Wraps any LLM client and reports each model call to `on_call(kind, data)`:
+    'llm_start' when a request goes out, 'llm_end' with its duration and outcome when it returns."""
+
+    _ids = itertools.count(1)  # global, so call ids stay unique across runs and resumes
+
+    def __init__(self, inner, on_call: Callable[[str, dict], None]):
+        self.inner = inner
+        self.on_call = on_call
+
+    def generate(self, prompt: str, *, model: str | None = None, **kwargs) -> str:
+        call = {"call": next(self._ids), "model": model or config.WORKER_MODEL}
+        self.on_call("llm_start", call)
+        t0 = time.monotonic()
+        try:
+            text = self.inner.generate(prompt, model=model, **kwargs)
+        except Exception as e:
+            self.on_call("llm_end", {**call, "ok": False, "ms": round((time.monotonic() - t0) * 1000),
+                                     "error": str(e)[:200]})
+            raise
+        self.on_call("llm_end", {**call, "ok": True, "ms": round((time.monotonic() - t0) * 1000)})
+        return text
+
+    def generate_json(self, prompt: str, **kwargs) -> dict | list:
+        return extract_json(self.generate(prompt + "\n\nRespond with valid JSON only.", **kwargs))
 
 
 def get_llm(on_retry=None):

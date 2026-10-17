@@ -55,3 +55,21 @@ def test_gives_up_after_all_attempts():
     c, calls, _ = client_with([RuntimeError("503 UNAVAILABLE")] * 6)
     with pytest.raises(LLMError, match="6 attempts"):
         c.generate("hi")
+
+
+def test_tracked_llm_reports_each_call_and_failures():
+    from pipelineiq.llm import FakeLLM, TrackedLLM
+
+    events = []
+    ok = TrackedLLM(FakeLLM(lambda p, s: '{"a": 1}'), lambda kind, data: events.append((kind, data)))
+    assert ok.generate_json("hi", model="m1") == {"a": 1}
+    assert [k for k, _ in events] == ["llm_start", "llm_end"]
+    assert events[1][1]["ok"] and events[1][1]["model"] == "m1" and events[1][1]["call"] == events[0][1]["call"]
+
+    def boom(p, s):
+        raise LLMError("quota exceeded")
+
+    events.clear()
+    with pytest.raises(LLMError):
+        TrackedLLM(FakeLLM(boom), lambda kind, data: events.append((kind, data))).generate("hi")
+    assert events[-1][0] == "llm_end" and not events[-1][1]["ok"] and "quota" in events[-1][1]["error"]

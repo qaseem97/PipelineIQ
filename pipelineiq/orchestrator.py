@@ -81,6 +81,7 @@ class Orchestrator:
             else:
                 self.on_event("recheck", {"phase": phase})
 
+            self.on_event("review_start", {"phase": phase})
             review: Review = self.manager.review(task["task_id"])
             self.on_event("review", review.__dict__)
 
