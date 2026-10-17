@@ -1,0 +1,43 @@
+# DigitalOcean App Platform spec.
+# Deploy:  doctl apps create --spec .do/app.yaml   (or paste it in the control panel: Create App -> Edit spec)
+name: pipelineiq
+region: fra
+services:
+  - name: web
+    github:
+      repo: qaseem97/PipelineIQ
+      branch: main
+      deploy_on_push: true
+    environment_slug: python
+    run_command: uvicorn pipelineiq.web:app --host 0.0.0.0 --port 8080
+    http_port: 8080
+    instance_count: 1            # keep 1: live run state is held in memory
+    instance_size_slug: apps-s-1vcpu-2gb
+    health_check:
+      http_path: /api/health
+    envs:
+      - key: GEMINI_API_KEY
+        scope: RUN_TIME
+        type: SECRET
+        value: "set-in-control-panel"
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        value: ${pipelineiq-db.DATABASE_URL}
+      - key: VECTOR_DB
+        scope: RUN_TIME
+        value: pgvector
+      - key: EMBEDDINGS
+        scope: RUN_TIME
+        value: gemini
+      - key: WORKER_MODEL
+        scope: RUN_TIME
+        value: gemma-4-26b-a4b-it
+      - key: MANAGER_MODEL
+        scope: RUN_TIME
+        value: gemma-4-31b-it
+databases:
+  # Existing DigitalOcean Managed PostgreSQL cluster (create it first, same region).
+  - name: pipelineiq-db
+    engine: PG
+    production: true
+    cluster_name: pipelineiq-db

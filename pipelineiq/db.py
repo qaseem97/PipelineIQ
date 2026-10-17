@@ -43,7 +43,18 @@ process_log_table = Table(
 _engine = None
 
 
+def normalize_url(url: str) -> str:
+    """DigitalOcean gives postgresql:// (or postgres://) URLs. SQLAlchemy would then look for
+    psycopg2, which is not installed, so force the psycopg (v3) driver from requirements.txt."""
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+    if url.startswith("postgresql://"):
+        url = "postgresql+psycopg://" + url[len("postgresql://"):]
+    return url
+
+
 def _create(url: str):
+    url = normalize_url(url)
     args = {"check_same_thread": False, "timeout": 30} if url.startswith("sqlite") else {}
     return create_engine(url, future=True, connect_args=args, pool_pre_ping=True)
 
