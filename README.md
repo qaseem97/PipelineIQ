@@ -86,9 +86,9 @@ Planning, Deployment and Maintenance agents, CI/CD and monitoring integrations, 
 
 Everything in this repository was built during the Hack Day.
 
-- _Name_ – _what they built_
-- _Name_ – _what they built_
-- _Name_ – _what they built_
+- Muhammad Qaseem – _build archietecture and features_
+- Yui Watanabe – _improve the UI design_
+- _Akash lanke_ – _ build features and ui_
 
 ## AI tools used
 
